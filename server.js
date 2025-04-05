@@ -11,7 +11,11 @@ const server = http.createServer(app);
 
 const io = socketIo(server, {
   cors: {
-    origin: "*",
+    origin: [
+      "https://web-production-37c14.up.railway.app",
+      "exp://192.168.244.197:19000",
+      "http://localhost:19006"
+    ],
     methods: ["GET", "POST"],
     credentials: true,
     allowedHeaders: ["Authorization"]
@@ -23,7 +27,11 @@ const io = socketIo(server, {
 });
 
 app.use(cors({
-  origin: "*",
+  origin: [
+    "https://web-production-37c14.up.railway.app",
+    "exp://192.168.244.197:19000",
+    "http://localhost:19006"
+  ],
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true,
   allowedHeaders: ["Content-Type", "Authorization"]
@@ -36,7 +44,7 @@ const rooms = {};
 const privateMessages = {};
 const onlineUsers = {};
 
-const JWT_SECRET = process.env.JWT_SECRET || 'e398e866a84cbfbda72c4e129e3115d1be990e9e9cb85f1182a1605d17ad8765';
+const JWT_SECRET = process.env.JWT_SECRET;
 
 app.get('/health', (req, res) => res.status(200).json({ status: 'healthy' }));
 
@@ -111,7 +119,7 @@ app.post('/api/rooms', authenticateToken, (req, res) => {
   };
   
   io.emit('room_created', { name, isPrivate: Boolean(isPrivate), creator: rooms[name].creator });
-  return res.status(201).json({ message: 'Room created successfully', room: { name, isPrivate: Boolean(isPrivate), creator: rooms[name].creator } });
+  return res.status(201).json({ message: 'Room created successfully' });
 });
 
 app.delete('/api/rooms/:roomName', authenticateToken, (req, res) => {
@@ -144,9 +152,7 @@ app.post('/api/rooms/kick', authenticateToken, (req, res) => {
   return res.status(200).json({ message: 'User kicked successfully' });
 });
 
-const generateMessageId = () => {
-  return uuidv4();
-};
+const generateMessageId = () => uuidv4();
 
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
@@ -194,7 +200,6 @@ io.on('connection', (socket) => {
     socket.emit('room_joined', { room: roomName });
     socket.to(roomName).emit('user_joined_room', { username: currentUser, room: roomName });
     socket.emit('room_history', { messages: rooms[roomName].messages || [] });
-    
     socket.emit('room_members', { 
       members: rooms[roomName].members || [],
       admins: rooms[roomName].admins || []
@@ -355,6 +360,12 @@ io.on('connection', (socket) => {
 
   socket.on('error', (error) => {
     console.error('Socket error:', error);
+  });
+});
+
+server.on('upgrade', (request, socket, head) => {
+  io.engine.handleUpgrade(request, socket, head, (ws) => {
+    io.engine.emit('connection', ws, request);
   });
 });
 
