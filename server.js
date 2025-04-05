@@ -36,7 +36,7 @@ const rooms = {};
 const privateMessages = {};
 const onlineUsers = {};
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key';
+const JWT_SECRET = process.env.JWT_SECRET || 'e398e866a84cbfbda72c4e129e3115d1be990e9e9cb85f1182a1605d17ad8765';
 
 app.get('/health', (req, res) => res.status(200).json({ status: 'healthy' }));
 
