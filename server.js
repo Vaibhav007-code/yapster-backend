@@ -9,12 +9,45 @@ const { v4: uuidv4 } = require('uuid');
 const app = express();
 const server = http.createServer(app);
 
+// Check for JWT_SECRET environment variable
+let JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('WARNING: JWT_SECRET environment variable is not set. Using fallback for development only.');
+  // Only use this fallback for development!
+  JWT_SECRET = 'dev_secret_key_do_not_use_in_production';
+}
+
+// Updated CORS configuration to include Expo domains
+const corsOptions = {
+  origin: [
+    "https://web-production-37c14.up.railway.app",
+    "exp://192.168.244.197:19000",
+    "http://localhost:19006",
+    "https://expo.dev",
+    /\.expo\.dev$/,
+    /exp:\/\/.*/,
+    // For development
+    '*'
+  ],
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  credentials: true,
+  allowedHeaders: ["Content-Type", "Authorization"]
+};
+
+app.use(cors(corsOptions));
+
+// Updated Socket.IO configuration with expanded CORS
 const io = socketIo(server, {
   cors: {
     origin: [
       "https://web-production-37c14.up.railway.app",
       "exp://192.168.244.197:19000",
-      "http://localhost:19006"
+      "http://localhost:19006",
+      "https://expo.dev",
+      /\.expo\.dev$/,
+      /exp:\/\/.*/,
+      // For development
+      '*'
     ],
     methods: ["GET", "POST"],
     credentials: true,
@@ -26,17 +59,6 @@ const io = socketIo(server, {
   pingInterval: 25000
 });
 
-app.use(cors({
-  origin: [
-    "https://web-production-37c14.up.railway.app",
-    "exp://192.168.244.197:19000",
-    "http://localhost:19006"
-  ],
-  methods: ["GET", "POST", "PUT", "DELETE"],
-  credentials: true,
-  allowedHeaders: ["Content-Type", "Authorization"]
-}));
-
 app.use(express.json({ limit: '5mb' }));
 
 const users = {};
@@ -44,7 +66,30 @@ const rooms = {};
 const privateMessages = {};
 const onlineUsers = {};
 
-const JWT_SECRET = process.env.JWT_SECRET;
+// Debugging endpoints
+app.get('/ping', (req, res) => {
+  res.status(200).send('pong');
+});
+
+app.get('/debug/env', (req, res) => {
+  res.status(200).json({
+    jwt_secret_exists: !!process.env.JWT_SECRET,
+    port: process.env.PORT,
+    node_env: process.env.NODE_ENV
+  });
+});
+
+app.options('/cors-test', cors(), (req, res) => {
+  res.status(200).end();
+});
+
+app.get('/cors-test', (req, res) => {
+  res.status(200).json({
+    message: 'CORS test successful',
+    origin: req.headers.origin || 'No origin header',
+    headers: req.headers
+  });
+});
 
 app.get('/health', (req, res) => res.status(200).json({ status: 'healthy' }));
 
@@ -54,6 +99,7 @@ app.get('/', (req, res) => {
 
 app.post('/register', async (req, res) => {
   try {
+    console.log('Registration attempt:', req.body.username);
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: 'Username and password are required' });
     if (users[username]) return res.status(400).json({ error: 'Username already exists' });
@@ -68,6 +114,7 @@ app.post('/register', async (req, res) => {
 
 app.post('/login', async (req, res) => {
   try {
+    console.log('Login attempt:', req.body.username);
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: 'Username and password are required' });
     const user = users[username];
@@ -87,7 +134,10 @@ const authenticateToken = (req, res, next) => {
   const token = authHeader && authHeader.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Authentication required' });
   jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) return res.status(403).json({ error: 'Invalid or expired token' });
+    if (err) {
+      console.error('Token verification error:', err);
+      return res.status(403).json({ error: 'Invalid or expired token' });
+    }
     req.user = user;
     next();
   });
@@ -156,17 +206,38 @@ const generateMessageId = () => uuidv4();
 
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
+  console.log('Connection headers:', socket.handshake.headers);
   let currentUser = null;
+  
+  // Ping handler for connection testing
+  socket.on('ping', (callback) => {
+    if (typeof callback === 'function') {
+      callback({
+        status: 'ok', 
+        time: new Date().toISOString(),
+        socketId: socket.id
+      });
+    } else {
+      socket.emit('pong', {
+        status: 'ok',
+        time: new Date().toISOString(),
+        socketId: socket.id
+      });
+    }
+  });
   
   socket.on('user_connected', ({ username, token }) => {
     try {
+      console.log(`User connection attempt: ${username}`);
       const decoded = jwt.verify(token, JWT_SECRET);
       if (decoded.username !== username) {
+        console.error(`Authentication failed for ${username}: token username mismatch`);
         socket.emit('error', { message: 'Authentication failed' });
         return;
       }
       currentUser = username;
       onlineUsers[username] = socket.id;
+      console.log(`User authenticated: ${username}`);
       io.emit('user_status_change', { username, status: 'online' });
       socket.emit('online_users', Object.keys(onlineUsers));
     } catch (error) {
@@ -352,6 +423,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
+    console.log(`Client disconnected: ${socket.id}, User: ${currentUser}`);
     if (currentUser) {
       delete onlineUsers[currentUser];
       io.emit('user_status_change', { username: currentUser, status: 'offline' });
@@ -359,7 +431,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('error', (error) => {
-    console.error('Socket error:', error);
+    console.error('Socket error for client:', socket.id, error);
   });
 });
 
