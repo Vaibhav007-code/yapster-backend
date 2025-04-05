@@ -17,41 +17,23 @@ if (!JWT_SECRET) {
   JWT_SECRET = 'dev_secret_key_do_not_use_in_production';
 }
 
-// Updated CORS configuration to include Expo domains
+// More permissive CORS configuration to ensure mobile app can connect
 const corsOptions = {
-  origin: [
-    "https://web-production-37c14.up.railway.app",
-    "exp://192.168.244.197:19000",
-    "http://localhost:19006",
-    "https://expo.dev",
-    /\.expo\.dev$/,
-    /exp:\/\/.*/,
-    // For development
-    '*'
-  ],
-  methods: ["GET", "POST", "PUT", "DELETE"],
+  origin: true, // Allow all origins
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   credentials: true,
   allowedHeaders: ["Content-Type", "Authorization"]
 };
 
 app.use(cors(corsOptions));
 
-// Updated Socket.IO configuration with expanded CORS
+// Configure Socket.IO with more permissive CORS
 const io = socketIo(server, {
   cors: {
-    origin: [
-      "https://web-production-37c14.up.railway.app",
-      "exp://192.168.244.197:19000",
-      "http://localhost:19006",
-      "https://expo.dev",
-      /\.expo\.dev$/,
-      /exp:\/\/.*/,
-      // For development
-      '*'
-    ],
-    methods: ["GET", "POST"],
+    origin: true, // Allow all origins
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     credentials: true,
-    allowedHeaders: ["Authorization"]
+    allowedHeaders: ["Content-Type", "Authorization"]
   },
   transports: ['websocket', 'polling'],
   maxHttpBufferSize: 5e6,
@@ -66,7 +48,7 @@ const rooms = {};
 const privateMessages = {};
 const onlineUsers = {};
 
-// Debugging endpoints
+// Enhanced debugging endpoints
 app.get('/ping', (req, res) => {
   res.status(200).send('pong');
 });
@@ -75,131 +57,224 @@ app.get('/debug/env', (req, res) => {
   res.status(200).json({
     jwt_secret_exists: !!process.env.JWT_SECRET,
     port: process.env.PORT,
-    node_env: process.env.NODE_ENV
+    node_env: process.env.NODE_ENV,
+    server_time: new Date().toISOString()
   });
 });
 
-app.options('/cors-test', cors(), (req, res) => {
-  res.status(200).end();
-});
+app.options('*', cors()); // Enable pre-flight for all routes
 
 app.get('/cors-test', (req, res) => {
   res.status(200).json({
     message: 'CORS test successful',
     origin: req.headers.origin || 'No origin header',
-    headers: req.headers
+    headers: req.headers,
+    timestamp: new Date().toISOString()
   });
 });
 
-app.get('/health', (req, res) => res.status(200).json({ status: 'healthy' }));
+app.get('/health', (req, res) => res.status(200).json({ 
+  status: 'healthy',
+  timestamp: new Date().toISOString() 
+}));
 
 app.get('/', (req, res) => {
-  res.status(200).send('Server is running');
+  res.status(200).send('Server is running. API endpoints available at /api/*');
 });
 
+// Improved error handling for registration
 app.post('/register', async (req, res) => {
   try {
-    console.log('Registration attempt:', req.body.username);
+    console.log('Registration attempt:', req.body);
     const { username, password } = req.body;
-    if (!username || !password) return res.status(400).json({ error: 'Username and password are required' });
-    if (users[username]) return res.status(400).json({ error: 'Username already exists' });
+    
+    if (!username || !password) {
+      console.log('Missing username or password');
+      return res.status(400).json({ error: 'Username and password are required' });
+    }
+    
+    if (users[username]) {
+      console.log('Username already exists:', username);
+      return res.status(400).json({ error: 'Username already exists' });
+    }
+    
     const hashedPassword = await bcrypt.hash(password, 10);
     users[username] = { password: hashedPassword };
+    console.log('User registered successfully:', username);
     return res.status(201).json({ message: 'User registered successfully' });
   } catch (error) {
     console.error('Registration error:', error);
-    return res.status(500).json({ error: 'Server error during registration' });
+    return res.status(500).json({ error: 'Server error during registration', details: error.message });
   }
 });
 
+// Improved error handling for login
 app.post('/login', async (req, res) => {
   try {
-    console.log('Login attempt:', req.body.username);
+    console.log('Login attempt:', req.body);
     const { username, password } = req.body;
-    if (!username || !password) return res.status(400).json({ error: 'Username and password are required' });
+    
+    if (!username || !password) {
+      console.log('Missing username or password');
+      return res.status(400).json({ error: 'Username and password are required' });
+    }
+    
     const user = users[username];
-    if (!user) return res.status(401).json({ error: 'Invalid username or password' });
+    if (!user) {
+      console.log('User not found:', username);
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+    
     const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) return res.status(401).json({ error: 'Invalid username or password' });
+    if (!isPasswordValid) {
+      console.log('Invalid password for user:', username);
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+    
     const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: '24h' });
+    console.log('Login successful:', username);
     return res.status(200).json({ token, username });
   } catch (error) {
     console.error('Login error:', error);
-    return res.status(500).json({ error: 'Server error during login' });
+    return res.status(500).json({ error: 'Server error during login', details: error.message });
   }
 });
 
+// Improved token authentication middleware
 const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Authentication required' });
-  jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) {
-      console.error('Token verification error:', err);
-      return res.status(403).json({ error: 'Invalid or expired token' });
+  try {
+    const authHeader = req.headers['authorization'];
+    console.log('Auth header:', authHeader);
+    
+    if (!authHeader) {
+      console.log('No auth header provided');
+      return res.status(401).json({ error: 'Authentication required' });
     }
-    req.user = user;
-    next();
-  });
+    
+    const token = authHeader.split(' ')[1];
+    if (!token) {
+      console.log('No token in auth header');
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+      if (err) {
+        console.error('Token verification error:', err);
+        return res.status(403).json({ error: 'Invalid or expired token' });
+      }
+      
+      req.user = user;
+      console.log('Token authenticated for user:', user.username);
+      next();
+    });
+  } catch (error) {
+    console.error('Authentication middleware error:', error);
+    return res.status(500).json({ error: 'Server error during authentication' });
+  }
 };
 
 app.get('/api/rooms', authenticateToken, (req, res) => {
-  const roomList = Object.keys(rooms).map(name => ({
-    name,
-    isPrivate: rooms[name].isPrivate,
-    creator: rooms[name].creator,
-    members: rooms[name].members || [],
-    admins: rooms[name].admins || []
-  }));
-  res.status(200).json({ rooms: roomList });
+  try {
+    const roomList = Object.keys(rooms).map(name => ({
+      name,
+      isPrivate: rooms[name].isPrivate,
+      creator: rooms[name].creator,
+      members: rooms[name].members || [],
+      admins: rooms[name].admins || []
+    }));
+    console.log(`Rooms list fetched by ${req.user.username}, found ${roomList.length} rooms`);
+    res.status(200).json({ rooms: roomList });
+  } catch (error) {
+    console.error('Error fetching rooms:', error);
+    res.status(500).json({ error: 'Server error fetching rooms' });
+  }
 });
 
 app.post('/api/rooms', authenticateToken, (req, res) => {
-  const { name, isPrivate, password, creator } = req.body;
-  if (!name) return res.status(400).json({ error: 'Room name is required' });
-  if (rooms[name]) return res.status(400).json({ error: 'Room already exists' });
-  
-  rooms[name] = {
-    isPrivate: Boolean(isPrivate),
-    password: isPrivate ? password : null,
-    messages: [],
-    creator: creator || req.user.username,
-    members: [creator || req.user.username],
-    admins: [creator || req.user.username]
-  };
-  
-  io.emit('room_created', { name, isPrivate: Boolean(isPrivate), creator: rooms[name].creator });
-  return res.status(201).json({ message: 'Room created successfully' });
+  try {
+    const { name, isPrivate, password, creator } = req.body;
+    
+    if (!name) {
+      return res.status(400).json({ error: 'Room name is required' });
+    }
+    
+    if (rooms[name]) {
+      return res.status(400).json({ error: 'Room already exists' });
+    }
+    
+    const roomCreator = creator || req.user.username;
+    
+    rooms[name] = {
+      isPrivate: Boolean(isPrivate),
+      password: isPrivate ? password : null,
+      messages: [],
+      creator: roomCreator,
+      members: [roomCreator],
+      admins: [roomCreator]
+    };
+    
+    console.log(`Room created: ${name} by ${roomCreator}`);
+    io.emit('room_created', { name, isPrivate: Boolean(isPrivate), creator: rooms[name].creator });
+    return res.status(201).json({ message: 'Room created successfully' });
+  } catch (error) {
+    console.error('Error creating room:', error);
+    res.status(500).json({ error: 'Server error creating room' });
+  }
 });
 
 app.delete('/api/rooms/:roomName', authenticateToken, (req, res) => {
-  const { roomName } = req.params;
-  const { username } = req.user;
-  
-  if (!rooms[roomName]) return res.status(404).json({ error: 'Room not found' });
-  if (!rooms[roomName].admins.includes(username)) return res.status(403).json({ error: 'Only admin can delete room' });
-  
-  delete rooms[roomName];
-  io.emit('room_deleted', { roomName });
-  return res.status(200).json({ message: 'Room deleted successfully' });
+  try {
+    const { roomName } = req.params;
+    const { username } = req.user;
+    
+    if (!rooms[roomName]) {
+      return res.status(404).json({ error: 'Room not found' });
+    }
+    
+    if (!rooms[roomName].admins.includes(username)) {
+      return res.status(403).json({ error: 'Only admin can delete room' });
+    }
+    
+    delete rooms[roomName];
+    console.log(`Room deleted: ${roomName} by ${username}`);
+    io.emit('room_deleted', { roomName });
+    return res.status(200).json({ message: 'Room deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting room:', error);
+    res.status(500).json({ error: 'Server error deleting room' });
+  }
 });
 
 app.post('/api/rooms/kick', authenticateToken, (req, res) => {
-  const { roomName, username } = req.body;
-  const admin = req.user.username;
-  
-  if (!rooms[roomName]) return res.status(404).json({ error: 'Room not found' });
-  if (!rooms[roomName].admins.includes(admin)) return res.status(403).json({ error: 'Only admin can kick users' });
-  if (rooms[roomName].admins.includes(username)) return res.status(403).json({ error: 'Cannot kick another admin' });
-  
-  rooms[roomName].members = rooms[roomName].members.filter(member => member !== username);
-  
-  if (onlineUsers[username]) {
-    io.to(onlineUsers[username]).emit('kicked_from_room', { roomName });
+  try {
+    const { roomName, username } = req.body;
+    const admin = req.user.username;
+    
+    if (!rooms[roomName]) {
+      return res.status(404).json({ error: 'Room not found' });
+    }
+    
+    if (!rooms[roomName].admins.includes(admin)) {
+      return res.status(403).json({ error: 'Only admin can kick users' });
+    }
+    
+    if (rooms[roomName].admins.includes(username)) {
+      return res.status(403).json({ error: 'Cannot kick another admin' });
+    }
+    
+    rooms[roomName].members = rooms[roomName].members.filter(member => member !== username);
+    
+    if (onlineUsers[username]) {
+      io.to(onlineUsers[username]).emit('kicked_from_room', { roomName });
+    }
+    
+    console.log(`User ${username} kicked from ${roomName} by ${admin}`);
+    io.to(roomName).emit('user_kicked', { username, roomName });
+    return res.status(200).json({ message: 'User kicked successfully' });
+  } catch (error) {
+    console.error('Error kicking user:', error);
+    res.status(500).json({ error: 'Server error kicking user' });
   }
-  
-  io.to(roomName).emit('user_kicked', { username, roomName });
-  return res.status(200).json({ message: 'User kicked successfully' });
 });
 
 const generateMessageId = () => uuidv4();
@@ -209,40 +284,54 @@ io.on('connection', (socket) => {
   console.log('Connection headers:', socket.handshake.headers);
   let currentUser = null;
   
-  // Ping handler for connection testing
+  // Enhanced ping handler for connection testing
   socket.on('ping', (callback) => {
+    const response = {
+      status: 'ok', 
+      time: new Date().toISOString(),
+      socketId: socket.id,
+      user: currentUser || 'unknown'
+    };
+    
     if (typeof callback === 'function') {
-      callback({
-        status: 'ok', 
-        time: new Date().toISOString(),
-        socketId: socket.id
-      });
+      callback(response);
     } else {
-      socket.emit('pong', {
-        status: 'ok',
-        time: new Date().toISOString(),
-        socketId: socket.id
-      });
+      socket.emit('pong', response);
     }
   });
   
   socket.on('user_connected', ({ username, token }) => {
     try {
       console.log(`User connection attempt: ${username}`);
-      const decoded = jwt.verify(token, JWT_SECRET);
-      if (decoded.username !== username) {
-        console.error(`Authentication failed for ${username}: token username mismatch`);
-        socket.emit('error', { message: 'Authentication failed' });
+      
+      if (!token) {
+        console.error(`No token provided for user ${username}`);
+        socket.emit('error', { message: 'Authentication failed: No token provided' });
         return;
       }
-      currentUser = username;
-      onlineUsers[username] = socket.id;
-      console.log(`User authenticated: ${username}`);
-      io.emit('user_status_change', { username, status: 'online' });
-      socket.emit('online_users', Object.keys(onlineUsers));
+      
+      jwt.verify(token, JWT_SECRET, (error, decoded) => {
+        if (error) {
+          console.error(`Token verification failed for ${username}:`, error);
+          socket.emit('error', { message: 'Authentication failed: Invalid token' });
+          return;
+        }
+        
+        if (decoded.username !== username) {
+          console.error(`Authentication failed for ${username}: token username mismatch`);
+          socket.emit('error', { message: 'Authentication failed: Username mismatch' });
+          return;
+        }
+        
+        currentUser = username;
+        onlineUsers[username] = socket.id;
+        console.log(`User authenticated: ${username}`);
+        io.emit('user_status_change', { username, status: 'online' });
+        socket.emit('online_users', Object.keys(onlineUsers));
+      });
     } catch (error) {
       console.error('Authentication error:', error);
-      socket.emit('error', { message: 'Authentication failed' });
+      socket.emit('error', { message: 'Authentication failed: ' + error.message });
     }
   });
 
@@ -251,174 +340,236 @@ io.on('connection', (socket) => {
   });
 
   socket.on('join_room', ({ roomName, password }) => {
-    if (!rooms[roomName]) {
-      socket.emit('error', { message: 'Room does not exist' });
-      return;
-    }
-    
-    if (rooms[roomName].isPrivate && !rooms[roomName].members.includes(currentUser)) {
-      if (password !== rooms[roomName].password) {
-        socket.emit('error', { message: 'Invalid password for private room' });
+    try {
+      if (!currentUser) {
+        socket.emit('error', { message: 'Authentication required to join room' });
         return;
       }
-    }
-    
-    if (!rooms[roomName].members.includes(currentUser)) {
-      rooms[roomName].members.push(currentUser);
-    }
-    
-    socket.join(roomName);
-    socket.emit('room_joined', { room: roomName });
-    socket.to(roomName).emit('user_joined_room', { username: currentUser, room: roomName });
-    socket.emit('room_history', { messages: rooms[roomName].messages || [] });
-    socket.emit('room_members', { 
-      members: rooms[roomName].members || [],
-      admins: rooms[roomName].admins || []
-    });
-  });
-
-  socket.on('invite_to_room', ({ roomName, username }) => {
-    if (!rooms[roomName]) {
-      socket.emit('error', { message: 'Room does not exist' });
-      return;
-    }
-    
-    if (!rooms[roomName].admins.includes(currentUser)) {
-      socket.emit('error', { message: 'Only admin can invite users' });
-      return;
-    }
-    
-    if (!onlineUsers[username]) {
-      socket.emit('error', { message: 'User is not online' });
-      return;
-    }
-    
-    if (!rooms[roomName].members.includes(username)) {
-      rooms[roomName].members.push(username);
-    }
-    io.to(onlineUsers[username]).emit('room_invite', { roomName, admin: currentUser });
-  });
-
-  socket.on('kick_from_room', ({ roomName, username }) => {
-    if (!rooms[roomName]) {
-      socket.emit('error', { message: 'Room does not exist' });
-      return;
-    }
-    
-    if (!rooms[roomName].admins.includes(currentUser)) {
-      socket.emit('error', { message: 'Only admin can kick users' });
-      return;
-    }
-    
-    if (rooms[roomName].admins.includes(username)) {
-      socket.emit('error', { message: 'Cannot kick another admin' });
-      return;
-    }
-    
-    rooms[roomName].members = rooms[roomName].members.filter(member => member !== username);
-    
-    if (onlineUsers[username]) {
-      io.to(onlineUsers[username]).emit('kicked_from_room', { roomName });
-    }
-    
-    io.to(roomName).emit('user_kicked', { username, roomName });
-    socket.emit('success', { message: 'User kicked successfully' });
-  });
-
-  socket.on('get_room_members', ({ roomName }) => {
-    if (rooms[roomName]) {
+      
+      if (!rooms[roomName]) {
+        socket.emit('error', { message: 'Room does not exist' });
+        return;
+      }
+      
+      if (rooms[roomName].isPrivate && !rooms[roomName].members.includes(currentUser)) {
+        if (password !== rooms[roomName].password) {
+          socket.emit('error', { message: 'Invalid password for private room' });
+          return;
+        }
+      }
+      
+      if (!rooms[roomName].members.includes(currentUser)) {
+        rooms[roomName].members.push(currentUser);
+      }
+      
+      socket.join(roomName);
+      console.log(`User ${currentUser} joined room ${roomName}`);
+      socket.emit('room_joined', { room: roomName });
+      socket.to(roomName).emit('user_joined_room', { username: currentUser, room: roomName });
+      socket.emit('room_history', { messages: rooms[roomName].messages || [] });
       socket.emit('room_members', { 
         members: rooms[roomName].members || [],
         admins: rooms[roomName].admins || []
       });
-    } else {
-      socket.emit('error', { message: 'Room does not exist' });
+    } catch (error) {
+      console.error(`Error joining room ${roomName}:`, error);
+      socket.emit('error', { message: 'Failed to join room: ' + error.message });
+    }
+  });
+
+  socket.on('invite_to_room', ({ roomName, username }) => {
+    try {
+      if (!currentUser) {
+        socket.emit('error', { message: 'Authentication required to invite users' });
+        return;
+      }
+      
+      if (!rooms[roomName]) {
+        socket.emit('error', { message: 'Room does not exist' });
+        return;
+      }
+      
+      if (!rooms[roomName].admins.includes(currentUser)) {
+        socket.emit('error', { message: 'Only admin can invite users' });
+        return;
+      }
+      
+      if (!onlineUsers[username]) {
+        socket.emit('error', { message: 'User is not online' });
+        return;
+      }
+      
+      if (!rooms[roomName].members.includes(username)) {
+        rooms[roomName].members.push(username);
+      }
+      
+      console.log(`User ${username} invited to room ${roomName} by ${currentUser}`);
+      io.to(onlineUsers[username]).emit('room_invite', { roomName, admin: currentUser });
+    } catch (error) {
+      console.error(`Error inviting user to room ${roomName}:`, error);
+      socket.emit('error', { message: 'Failed to invite user: ' + error.message });
+    }
+  });
+
+  socket.on('kick_from_room', ({ roomName, username }) => {
+    try {
+      if (!currentUser) {
+        socket.emit('error', { message: 'Authentication required to kick users' });
+        return;
+      }
+      
+      if (!rooms[roomName]) {
+        socket.emit('error', { message: 'Room does not exist' });
+        return;
+      }
+      
+      if (!rooms[roomName].admins.includes(currentUser)) {
+        socket.emit('error', { message: 'Only admin can kick users' });
+        return;
+      }
+      
+      if (rooms[roomName].admins.includes(username)) {
+        socket.emit('error', { message: 'Cannot kick another admin' });
+        return;
+      }
+      
+      rooms[roomName].members = rooms[roomName].members.filter(member => member !== username);
+      
+      if (onlineUsers[username]) {
+        io.to(onlineUsers[username]).emit('kicked_from_room', { roomName });
+      }
+      
+      console.log(`User ${username} kicked from room ${roomName} by ${currentUser}`);
+      io.to(roomName).emit('user_kicked', { username, roomName });
+      socket.emit('success', { message: 'User kicked successfully' });
+    } catch (error) {
+      console.error(`Error kicking user from room ${roomName}:`, error);
+      socket.emit('error', { message: 'Failed to kick user: ' + error.message });
+    }
+  });
+
+  socket.on('get_room_members', ({ roomName }) => {
+    try {
+      if (!currentUser) {
+        socket.emit('error', { message: 'Authentication required to get room members' });
+        return;
+      }
+      
+      if (rooms[roomName]) {
+        socket.emit('room_members', { 
+          members: rooms[roomName].members || [],
+          admins: rooms[roomName].admins || []
+        });
+      } else {
+        socket.emit('error', { message: 'Room does not exist' });
+      }
+    } catch (error) {
+      console.error(`Error getting room members for ${roomName}:`, error);
+      socket.emit('error', { message: 'Failed to get room members: ' + error.message });
     }
   });
 
   socket.on('room_message', ({ roomName, message }) => {
-    if (!currentUser) {
-      socket.emit('error', { message: 'Authentication required' });
-      return;
+    try {
+      if (!currentUser) {
+        socket.emit('error', { message: 'Authentication required' });
+        return;
+      }
+      
+      if (!rooms[roomName]) {
+        socket.emit('error', { message: 'Room does not exist' });
+        return;
+      }
+      
+      if (!rooms[roomName].members.includes(currentUser)) {
+        socket.emit('error', { message: 'You are not a member of this room' });
+        return;
+      }
+      
+      const messageData = {
+        id: generateMessageId(),
+        text: message.text,
+        media: message.media,
+        sender: currentUser,
+        timestamp: message.timestamp || new Date().toISOString()
+      };
+      
+      rooms[roomName].messages.push(messageData);
+      console.log(`New message in room ${roomName} from ${currentUser}`);
+      io.to(roomName).emit('new_room_message', { room: roomName, message: messageData });
+    } catch (error) {
+      console.error(`Error sending room message to ${roomName}:`, error);
+      socket.emit('error', { message: 'Failed to send message: ' + error.message });
     }
-    
-    if (!rooms[roomName]) {
-      socket.emit('error', { message: 'Room does not exist' });
-      return;
-    }
-    
-    if (!rooms[roomName].members.includes(currentUser)) {
-      socket.emit('error', { message: 'You are not a member of this room' });
-      return;
-    }
-    
-    const messageData = {
-      id: generateMessageId(),
-      text: message.text,
-      media: message.media,
-      sender: currentUser,
-      timestamp: message.timestamp || new Date().toISOString()
-    };
-    
-    rooms[roomName].messages.push(messageData);
-    io.to(roomName).emit('new_room_message', { room: roomName, message: messageData });
   });
 
   socket.on('get_private_messages', ({ otherUser }) => {
-    if (!currentUser) {
-      socket.emit('error', { message: 'Authentication required' });
-      return;
+    try {
+      if (!currentUser) {
+        socket.emit('error', { message: 'Authentication required' });
+        return;
+      }
+      
+      if (!privateMessages[currentUser]) {
+        privateMessages[currentUser] = {};
+      }
+      
+      if (!privateMessages[currentUser][otherUser]) {
+        privateMessages[currentUser][otherUser] = [];
+      }
+      
+      console.log(`Private messages requested between ${currentUser} and ${otherUser}`);
+      socket.emit('private_message_history', { 
+        messages: privateMessages[currentUser][otherUser] || [] 
+      });
+    } catch (error) {
+      console.error(`Error getting private messages with ${otherUser}:`, error);
+      socket.emit('error', { message: 'Failed to get private messages: ' + error.message });
     }
-    
-    if (!privateMessages[currentUser]) {
-      privateMessages[currentUser] = {};
-    }
-    
-    if (!privateMessages[currentUser][otherUser]) {
-      privateMessages[currentUser][otherUser] = [];
-    }
-    
-    socket.emit('private_message_history', { 
-      messages: privateMessages[currentUser][otherUser] || [] 
-    });
   });
 
   socket.on('private_message', ({ recipient, message }) => {
-    if (!currentUser) {
-      socket.emit('error', { message: 'Authentication required' });
-      return;
-    }
-    
-    const messageData = {
-      id: generateMessageId(),
-      text: message.text,
-      media: message.media,
-      sender: currentUser,
-      recipient: recipient,
-      timestamp: message.timestamp || new Date().toISOString()
-    };
-    
-    if (!privateMessages[currentUser]) {
-      privateMessages[currentUser] = {};
-    }
-    if (!privateMessages[currentUser][recipient]) {
-      privateMessages[currentUser][recipient] = [];
-    }
-    privateMessages[currentUser][recipient].push(messageData);
-    
-    if (!privateMessages[recipient]) {
-      privateMessages[recipient] = {};
-    }
-    if (!privateMessages[recipient][currentUser]) {
-      privateMessages[recipient][currentUser] = [];
-    }
-    privateMessages[recipient][currentUser].push(messageData);
-    
-    socket.emit('private_message', messageData);
-    
-    const recipientSocketId = onlineUsers[recipient];
-    if (recipientSocketId) {
-      io.to(recipientSocketId).emit('private_message', messageData);
+    try {
+      if (!currentUser) {
+        socket.emit('error', { message: 'Authentication required' });
+        return;
+      }
+      
+      const messageData = {
+        id: generateMessageId(),
+        text: message.text,
+        media: message.media,
+        sender: currentUser,
+        recipient: recipient,
+        timestamp: message.timestamp || new Date().toISOString()
+      };
+      
+      if (!privateMessages[currentUser]) {
+        privateMessages[currentUser] = {};
+      }
+      if (!privateMessages[currentUser][recipient]) {
+        privateMessages[currentUser][recipient] = [];
+      }
+      privateMessages[currentUser][recipient].push(messageData);
+      
+      if (!privateMessages[recipient]) {
+        privateMessages[recipient] = {};
+      }
+      if (!privateMessages[recipient][currentUser]) {
+        privateMessages[recipient][currentUser] = [];
+      }
+      privateMessages[recipient][currentUser].push(messageData);
+      
+      console.log(`Private message sent from ${currentUser} to ${recipient}`);
+      socket.emit('private_message', messageData);
+      
+      const recipientSocketId = onlineUsers[recipient];
+      if (recipientSocketId) {
+        io.to(recipientSocketId).emit('private_message', messageData);
+      }
+    } catch (error) {
+      console.error(`Error sending private message to ${recipient}:`, error);
+      socket.emit('error', { message: 'Failed to send private message: ' + error.message });
     }
   });
 
@@ -435,6 +586,11 @@ io.on('connection', (socket) => {
   });
 });
 
+// Add additional error handlers
+server.on('error', (error) => {
+  console.error('Server error:', error);
+});
+
 server.on('upgrade', (request, socket, head) => {
   io.engine.handleUpgrade(request, socket, head, (ws) => {
     io.engine.emit('connection', ws, request);
@@ -443,5 +599,5 @@ server.on('upgrade', (request, socket, head) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT} at ${new Date().toISOString()}`);
 });
