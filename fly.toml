@@ -1,0 +1,26 @@
+# fly.toml
+app = "your-chat-backend"  # Lowercase, no spaces, unique name
+primary_region = "sin"     # Singapore (or "iad" for Virginia, "lax" for LA)
+
+[build]
+  builder = "heroku/buildpacks:20"  # Auto-detects Node.js
+  buildpacks = ["heroku/nodejs"]    # Explicit buildpack
+
+[env]
+  NODE_ENV = "production"
+
+[http_service]
+  internal_port = 3000     # Must match server.js PORT
+  force_https = true       # Essential for WebSockets
+  auto_stop_machines = false # Prevent cold starts
+  min_machines_running = 1 # Free tier allows this
+
+  [[http_service.ports]]
+    handlers = ["http"]
+    port = 80
+  [[http_service.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+
+[experimental]
+  auto_rollback = true     # Safety feature
