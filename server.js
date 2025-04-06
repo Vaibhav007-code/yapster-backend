@@ -597,7 +597,10 @@ server.on('upgrade', (request, socket, head) => {
   });
 });
 
-const PORT = process.env.PORT || 3000;
+// Special configuration for Fly.io
+// Fly.io uses PORT 8080 by default, but we'll check for PORT env var as well
+const PORT = process.env.PORT || 8080;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT} at ${new Date().toISOString()}`);
+  console.log(`Server environment: ${process.env.NODE_ENV || 'development'}`);
 });
